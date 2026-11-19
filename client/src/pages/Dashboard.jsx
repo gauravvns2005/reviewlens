@@ -9,7 +9,8 @@ import {
   getReviews,
   getReviewStats,
   getReviewInsights,
-  analyzePendingReviews
+  analyzePendingReviews,
+  generateSuggestedReply
 } from '../api.js';
 
 function Dashboard() {
@@ -115,6 +116,37 @@ function Dashboard() {
     loadDashboardData();
   }
 
+  // Handle On-Demand Suggested Reply Generation
+  async function handleGenerateReply(review) {
+    const id = review.reviewId || review._id;
+    setGeneratingReplyId(id);
+    setNotification(null);
+
+    try {
+      const res = await generateSuggestedReply(id);
+      // Update local state with the generated reply
+      setReviews(prev => prev.map(r => {
+        if ((r.reviewId && r.reviewId === id) || (r._id && r._id === id)) {
+          return { ...r, suggestedReply: res.suggestedReply };
+        }
+        return r;
+      }));
+
+      setNotification({
+        type: 'success',
+        message: `Generated professional response for Review ${id}!`
+      });
+    } catch (err) {
+      const msg = err.response?.data?.message || err.message;
+      setNotification({
+        type: 'error',
+        message: `Failed to generate reply: ${msg}`
+      });
+    } finally {
+      setGeneratingReplyId(null);
+    }
+  }
+
   // Calculate pending reviews
   const pendingCount = reviews.filter(r => r.analysisStatus === 'pending').length;
 
@@ -174,7 +206,7 @@ function Dashboard() {
               <ReviewTable
                 reviews={reviews}
                 generatingReplyId={generatingReplyId}
-                onGenerateReply={() => setCurrentView('reviews')}
+                onGenerateReply={handleGenerateReply}
               />
             </div>
           </div>
@@ -186,7 +218,7 @@ function Dashboard() {
             <ReviewTable
               reviews={reviews}
               generatingReplyId={generatingReplyId}
-              onGenerateReply={() => {}}
+              onGenerateReply={handleGenerateReply}
             />
           </div>
         )}

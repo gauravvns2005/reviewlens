@@ -5,7 +5,8 @@ import {
   getReviews,
   analyzeReviews,
   getReviewStats,
-  getReviewInsights
+  getReviewInsights,
+  generateReviewReply
 } from '../controllers/reviewController.js';
 
 const router = express.Router();
@@ -48,6 +49,10 @@ router.get('/stats', getReviewStats);
 // Route: Top complaints and praises
 // GET /api/reviews/insights
 router.get('/insights', getReviewInsights);
+
+// Route: Generate suggested reply for a review
+// POST /api/reviews/:id/reply
+router.post('/:id/reply', generateReviewReply);
 
 // Route: Get all reviews (supports ?sentiment=negative etc.)
 // GET /api/reviews

@@ -64,6 +64,16 @@ export async function getReviewInsights() {
 }
 
 /**
+ * Generate a suggested AI support response for a specific review
+ * @param {string} reviewId
+ * @returns {Promise<object>}
+ */
+export async function generateSuggestedReply(reviewId) {
+  const response = await apiClient.post(`/reviews/${reviewId}/reply`);
+  return response.data;
+}
+
+/**
  * Check backend health status
  * @returns {Promise<object>}
  */

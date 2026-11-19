@@ -9,7 +9,7 @@ import {
   chunkArray,
   retryWithBackoff
 } from '../utils/helpers.js';
-import { analyzeReviewWithAI } from '../services/aiService.js';
+import { analyzeReviewWithAI, generateSupportReply } from '../services/aiService.js';
 
 // In-memory fallback array when MongoDB is not connected (e.g. offline demo or test)
 let memoryStore = [];
@@ -417,6 +417,42 @@ export async function getReviewInsights(req, res, next) {
       status: 'ok',
       topComplaints,
       topPraises
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Generate a suggested support reply for a review
+ * POST /api/reviews/:id/reply
+ */
+export async function generateReviewReply(req, res, next) {
+  try {
+    const { id } = req.params;
+
+    // Search by reviewId (e.g. 'R002') or MongoDB ObjectId
+    const review = await findSingleReview({ reviewId: id }) || await findSingleReview({ _id: id });
+
+    if (!review) {
+      return res.status(404).json({
+        status: 'error',
+        message: `Review with ID "${id}" was not found.`
+      });
+    }
+
+    // Call AI service to generate reply
+    const replyText = await generateSupportReply(review);
+
+    // Save generated reply on the document
+    review.suggestedReply = replyText;
+    await saveReviewDoc(review);
+
+    return res.status(200).json({
+      status: 'ok',
+      message: 'Suggested reply generated successfully.',
+      reviewId: review.reviewId,
+      suggestedReply: replyText
     });
   } catch (error) {
     next(error);

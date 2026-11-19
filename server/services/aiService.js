@@ -222,3 +222,62 @@ Output ONLY the valid JSON object:`;
     };
   }
 }
+
+/**
+ * Generates an empathetic, professional support reply for a customer review.
+ * 
+ * Rules:
+ * - Professional and polite
+ * - Directly addresses the actual complaint or question
+ * - Always in English
+ * - Avoids making unsupported promises (no unverified refunds/gifts)
+ * - Intelligent fallback provided if GEMINI_API_KEY is not configured
+ *
+ * @param {object} review 
+ * @returns {Promise<string>} suggested response text
+ */
+export async function generateSupportReply(review) {
+  const model = getGeminiModel();
+
+  if (!model) {
+    // Graceful intelligent template fallback for offline/demo/testing mode
+    const topicText = Array.isArray(review.topics) && review.topics.length > 0
+      ? review.topics.join(' and ')
+      : 'experience';
+
+    return `Dear Customer, thank you for your feedback regarding your ${review.product || 'purchase'}. We sincerely apologize for the inconvenience caused regarding your ${topicText}. Our support team would love the opportunity to assist you. Please reach out to us at support@example.com with your order number so we can help resolve this promptly.`;
+  }
+
+  const prompt = `You are a professional, courteous customer service specialist for an e-commerce platform.
+
+TASK:
+Write a thoughtful, professional response to the customer review below.
+
+RULES:
+1. Tone: Empathetic, respectful, polite, and solution-oriented.
+2. Directly acknowledge and address their specific feedback or complaint (e.g. quality issue, broken part, delivery delay, or question).
+3. Language: Clear, professional English.
+4. DO NOT make unsupported promises (do not promise immediate cash refunds or unverified free replacements).
+5. Guide the customer on the next step: invite them to reach out to customer support with their order ID.
+6. Length: 2 to 4 concise sentences.
+
+CUSTOMER REVIEW DETAILS:
+Product: ${review.product || 'Unknown'}
+Rating: ${review.rating ? `${review.rating} Stars` : 'Not provided'}
+AI Summary: ${review.summary || 'Customer has an unresolved issue.'}
+Topics: ${Array.isArray(review.topics) ? review.topics.join(', ') : 'general'}
+
+CUSTOMER REVIEW TEXT:
+"${review.reviewText}"
+
+Write ONLY the customer support response text without quotes, markdown headers, or placeholders:`;
+
+  try {
+    const result = await model.generateContent(prompt);
+    const reply = result.response.text().trim();
+    return reply;
+  } catch (error) {
+    console.error('Error calling Gemini for support reply:', error.message);
+    return `Dear Customer, thank you for reaching out regarding your ${review.product || 'order'}. We apologize for the trouble you experienced. Please email our support team at support@example.com with your order number so we can investigate this immediately for you.`;
+  }
+}
