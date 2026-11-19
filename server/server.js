@@ -4,6 +4,7 @@ import helmet from 'helmet';
 import dotenv from 'dotenv';
 import mongoose from 'mongoose';
 import connectDB from './config/db.js';
+import reviewRoutes from './routes/reviewRoutes.js';
 
 // 1. Load environment variables from .env file
 dotenv.config();
@@ -56,7 +57,10 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// 8. Default root route
+// 8. Main API Routes
+app.use('/api/reviews', reviewRoutes);
+
+// 9. Default root route
 app.get('/', (req, res) => {
   res.send('Welcome to the ReviewLens API. Access /api/health for server status.');
 });
