@@ -2,12 +2,16 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import mongoose from 'mongoose';
 import connectDB from './config/db.js';
 import reviewRoutes from './routes/reviewRoutes.js';
 
-// 1. Load environment variables from .env file
-dotenv.config();
+// 1. Resolve directory and load environment variables from server/.env file
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 
 // 2. Initialize the Express application
 const app = express();

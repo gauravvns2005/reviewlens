@@ -1,4 +1,5 @@
 import { parse } from 'csv-parse/sync';
+import mongoose from 'mongoose';
 import Review from '../models/Review.js';
 import {
   cleanReviewText,
@@ -10,13 +11,82 @@ import {
 } from '../utils/helpers.js';
 import { analyzeReviewWithAI } from '../services/aiService.js';
 
+// In-memory fallback array when MongoDB is not connected (e.g. offline demo or test)
+let memoryStore = [];
+
+/**
+ * Helper: Find reviews matching query from MongoDB or in-memory fallback
+ */
+async function getStoredReviews(filter = {}) {
+  if (mongoose.connection.readyState === 1) {
+    return await Review.find(filter).sort({ reviewId: 1 });
+  }
+
+  // In-memory filter
+  return memoryStore.filter(r => {
+    if (filter.sentiment && r.sentiment !== filter.sentiment) return false;
+    if (filter.product && r.product !== filter.product) return false;
+    if (filter.needsReply !== undefined && r.needsReply !== filter.needsReply) return false;
+    if (filter.analysisStatus && r.analysisStatus !== filter.analysisStatus) return false;
+    return true;
+  });
+}
+
+/**
+ * Helper: Find a single review by query
+ */
+async function findSingleReview(query) {
+  if (mongoose.connection.readyState === 1) {
+    return await Review.findOne(query);
+  }
+  return memoryStore.find(r => {
+    if (query.reviewId && r.reviewId === query.reviewId) return true;
+    if (query.reviewHash && r.reviewHash === query.reviewHash && query.analysisStatus && r.analysisStatus === query.analysisStatus) {
+      if (query._id && query._id.$ne && r._id === query._id.$ne) return false;
+      return true;
+    }
+    return false;
+  }) || null;
+}
+
+/**
+ * Helper: Save or update a review
+ */
+async function saveReviewDoc(reviewData) {
+  if (mongoose.connection.readyState === 1) {
+    const existing = await Review.findOne({ reviewId: reviewData.reviewId });
+    if (existing) {
+      Object.assign(existing, reviewData);
+      return await existing.save();
+    }
+    return await Review.create(reviewData);
+  }
+
+  // In-memory update or insert
+  const existingIndex = memoryStore.findIndex(r => r.reviewId === reviewData.reviewId);
+  const doc = {
+    _id: reviewData._id || `mem_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+    ...reviewData,
+    createdAt: reviewData.createdAt || new Date(),
+    updatedAt: new Date(),
+    save: async function() { return this; }
+  };
+
+  if (existingIndex >= 0) {
+    memoryStore[existingIndex] = { ...memoryStore[existingIndex], ...doc };
+    return memoryStore[existingIndex];
+  } else {
+    memoryStore.push(doc);
+    return doc;
+  }
+}
+
 /**
  * Upload and process CSV reviews
  * POST /api/reviews/upload
  */
 export async function uploadReviews(req, res, next) {
   try {
-    // 1. Verify a file was actually uploaded
     if (!req.file) {
       return res.status(400).json({
         status: 'error',
@@ -24,13 +94,12 @@ export async function uploadReviews(req, res, next) {
       });
     }
 
-    // 2. Parse the CSV file from memory buffer
     const fileContent = req.file.buffer.toString('utf-8');
     let records = [];
 
     try {
       records = parse(fileContent, {
-        columns: true, // Auto-map first row as object keys
+        columns: true,
         skip_empty_lines: true,
         trim: true,
         relax_column_count: true
@@ -49,7 +118,6 @@ export async function uploadReviews(req, res, next) {
       });
     }
 
-    // 3. Keep track of processing statistics
     const stats = {
       totalRows: records.length,
       saved: 0,
@@ -60,9 +128,7 @@ export async function uploadReviews(req, res, next) {
     const savedReviews = [];
     const seenHashesInBatch = new Set();
 
-    // 4. Process each row using a clear, beginner-friendly loop
     for (const row of records) {
-      // Normalize column names (support review_id or reviewId, review_text or reviewText)
       const rawId = row.review_id || row.reviewId || '';
       const rawProduct = row.product || 'Unknown Product';
       const rawRating = row.rating;
@@ -75,12 +141,8 @@ export async function uploadReviews(req, res, next) {
       const rating = validateRating(rawRating);
       const reviewHash = generateReviewHash(cleanedText);
 
-      // Edge case 1: Missing review ID
-      if (!reviewId) {
-        continue;
-      }
+      if (!reviewId) continue;
 
-      // Edge case 2: Duplicate review in the same CSV upload
       if (seenHashesInBatch.has(reviewHash) && cleanedText.length > 0) {
         stats.skippedDuplicates++;
         continue;
@@ -89,56 +151,32 @@ export async function uploadReviews(req, res, next) {
         seenHashesInBatch.add(reviewHash);
       }
 
-      // Edge case 3: Empty review text
       let analysisStatus = 'pending';
-      if (cleanedText.length === 0) {
-        analysisStatus = 'insufficient_content';
-        stats.insufficientContent++;
-      } else if (isEmojiOnly(cleanedText)) {
-        // Edge case 4: Emoji-only review text (e.g., R009)
+      if (cleanedText.length === 0 || isEmojiOnly(cleanedText)) {
         analysisStatus = 'insufficient_content';
         stats.insufficientContent++;
       }
 
-      // Check if this reviewId already exists in database to prevent duplicates
-      const existingReview = await Review.findOne({ reviewId: reviewId });
+      const reviewData = {
+        reviewId,
+        product,
+        rating,
+        date: rawDate,
+        reviewText: cleanedText,
+        analysisStatus,
+        reviewHash,
+        sentiment: null,
+        topics: [],
+        summary: '',
+        needsReply: false,
+        isRatingMismatch: false
+      };
 
-      if (existingReview) {
-        // Update existing record with cleaned CSV data without overwriting already analyzed fields
-        existingReview.product = product;
-        existingReview.rating = rating;
-        existingReview.date = rawDate;
-        existingReview.reviewText = cleanedText;
-        existingReview.reviewHash = reviewHash;
-        if (existingReview.analysisStatus !== 'analyzed') {
-          existingReview.analysisStatus = analysisStatus;
-        }
-        await existingReview.save();
-        savedReviews.push(existingReview);
-        stats.saved++;
-      } else {
-        // Create a new review document
-        const newReview = await Review.create({
-          reviewId,
-          product,
-          rating,
-          date: rawDate,
-          reviewText: cleanedText,
-          analysisStatus,
-          reviewHash,
-          sentiment: null,
-          topics: [],
-          summary: '',
-          needsReply: false,
-          isRatingMismatch: false
-        });
-
-        savedReviews.push(newReview);
-        stats.saved++;
-      }
+      const savedDoc = await saveReviewDoc(reviewData);
+      savedReviews.push(savedDoc);
+      stats.saved++;
     }
 
-    // 5. Return success response with stats
     return res.status(200).json({
       status: 'ok',
       message: `Successfully processed ${stats.totalRows} CSV records.`,
@@ -151,30 +189,19 @@ export async function uploadReviews(req, res, next) {
 }
 
 /**
- * Fetch all reviews from MongoDB
+ * Fetch all reviews from MongoDB or memory
  * GET /api/reviews
  */
 export async function getReviews(req, res, next) {
   try {
     const { sentiment, product, needsReply } = req.query;
-
-    // Build filter query object conditionally
     const filter = {};
 
-    if (sentiment) {
-      filter.sentiment = sentiment;
-    }
+    if (sentiment) filter.sentiment = sentiment;
+    if (product) filter.product = product;
+    if (needsReply !== undefined) filter.needsReply = needsReply === 'true';
 
-    if (product) {
-      filter.product = product;
-    }
-
-    if (needsReply !== undefined) {
-      filter.needsReply = needsReply === 'true';
-    }
-
-    // Retrieve reviews sorted by reviewId or date
-    const reviews = await Review.find(filter).sort({ reviewId: 1 });
+    const reviews = await getStoredReviews(filter);
 
     return res.status(200).json({
       status: 'ok',
@@ -192,8 +219,15 @@ export async function getReviews(req, res, next) {
  */
 export async function analyzeReviews(req, res, next) {
   try {
-    // 1. Find all pending reviews in MongoDB
-    const pendingReviews = await Review.find({ analysisStatus: 'pending' });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {
+      return res.status(400).json({
+        status: 'error',
+        message: 'GEMINI_API_KEY is not configured in server/.env. Please configure your Google Gemini API key before running AI analysis.'
+      });
+    }
+
+    const pendingReviews = await getStoredReviews({ analysisStatus: 'pending' });
 
     if (!pendingReviews || pendingReviews.length === 0) {
       return res.status(200).json({
@@ -210,7 +244,6 @@ export async function analyzeReviews(req, res, next) {
       });
     }
 
-    // 2. Statistics tracker
     const stats = {
       totalPending: pendingReviews.length,
       processed: 0,
@@ -220,24 +253,19 @@ export async function analyzeReviews(req, res, next) {
       ratingMismatches: 0
     };
 
-    // 3. Split into batches of 5
     const batches = chunkArray(pendingReviews, 5);
 
-    // 4. Process each batch sequentially using simple loops
     for (const batch of batches) {
-      // Process the reviews inside this batch
       for (const review of batch) {
         try {
-          // STEP A: Cache Lookup using SHA-256 reviewHash
-          // Check if an identical review was already analyzed previously
-          const cachedReview = await Review.findOne({
+          // STEP A: Cache Lookup
+          const cachedReview = await findSingleReview({
             reviewHash: review.reviewHash,
             analysisStatus: 'analyzed',
             _id: { $ne: review._id }
           });
 
           if (cachedReview) {
-            // Cache Hit: Reuse existing analysis without calling Gemini API
             review.sentiment = cachedReview.sentiment;
             review.topics = cachedReview.topics;
             review.summary = cachedReview.summary;
@@ -245,7 +273,7 @@ export async function analyzeReviews(req, res, next) {
             review.analysisStatus = 'analyzed';
             stats.cacheHits++;
           } else {
-            // STEP B: Cache Miss - Call Gemini API with Exponential Backoff Retry
+            // STEP B: Cache Miss - Call Gemini with Retry
             const aiResult = await retryWithBackoff(async () => {
               return await analyzeReviewWithAI(review.reviewText, review.product, review.rating);
             }, 3, 1000);
@@ -264,8 +292,7 @@ export async function analyzeReviews(req, res, next) {
             }
           }
 
-          // STEP C: Contradiction / Rating Mismatch Detection
-          // e.g. 5-star rating with negative text, or 1-star rating with positive praise
+          // STEP C: Rating Mismatch Detection
           if (review.rating !== null && review.sentiment) {
             if (review.rating >= 4 && review.sentiment === 'negative') {
               review.isRatingMismatch = true;
@@ -278,13 +305,12 @@ export async function analyzeReviews(req, res, next) {
             }
           }
 
-          // Save the analyzed record
-          await review.save();
+          await saveReviewDoc(review);
           stats.processed++;
         } catch (itemError) {
           console.error(`Error processing review ${review.reviewId}:`, itemError.message);
           review.analysisStatus = 'analysis_failed';
-          await review.save();
+          await saveReviewDoc(review);
           stats.failedAnalyses++;
           stats.processed++;
         }
@@ -307,7 +333,7 @@ export async function analyzeReviews(req, res, next) {
  */
 export async function getReviewStats(req, res, next) {
   try {
-    const allReviews = await Review.find();
+    const allReviews = await getStoredReviews();
 
     const totalReviews = allReviews.length;
     const analysedReviews = allReviews.filter(r => r.analysisStatus === 'analyzed');
@@ -327,7 +353,6 @@ export async function getReviewStats(req, res, next) {
       if (r.isRatingMismatch === true) ratingMismatchCount++;
     }
 
-    // Calculate percentages safely (avoid divide by zero)
     const positivePercentage = totalAnalysed > 0 ? Number(((positiveCount / totalAnalysed) * 100).toFixed(1)) : 0;
     const neutralPercentage = totalAnalysed > 0 ? Number(((neutralCount / totalAnalysed) * 100).toFixed(1)) : 0;
     const negativePercentage = totalAnalysed > 0 ? Number(((negativeCount / totalAnalysed) * 100).toFixed(1)) : 0;
@@ -358,9 +383,8 @@ export async function getReviewStats(req, res, next) {
  */
 export async function getReviewInsights(req, res, next) {
   try {
-    const analysedReviews = await Review.find({ analysisStatus: 'analyzed' });
+    const analysedReviews = await getStoredReviews({ analysisStatus: 'analyzed' });
 
-    // 1. Count topic frequencies among negative reviews (Top Complaints)
     const complaintCounts = {};
     for (const r of analysedReviews) {
       if (r.sentiment === 'negative' && Array.isArray(r.topics)) {
@@ -370,7 +394,6 @@ export async function getReviewInsights(req, res, next) {
       }
     }
 
-    // 2. Count topic frequencies among positive reviews (Top Praises)
     const praiseCounts = {};
     for (const r of analysedReviews) {
       if (r.sentiment === 'positive' && Array.isArray(r.topics)) {
@@ -380,7 +403,6 @@ export async function getReviewInsights(req, res, next) {
       }
     }
 
-    // Helper: sort object entries descending and take top 3
     function getTopThree(countsObj) {
       return Object.entries(countsObj)
         .map(([topic, count]) => ({ topic, count }))
