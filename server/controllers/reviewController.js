@@ -4,8 +4,11 @@ import {
   cleanReviewText,
   validateRating,
   generateReviewHash,
-  isEmojiOnly
+  isEmojiOnly,
+  chunkArray,
+  retryWithBackoff
 } from '../utils/helpers.js';
+import { analyzeReviewWithAI } from '../services/aiService.js';
 
 /**
  * Upload and process CSV reviews
@@ -177,6 +180,221 @@ export async function getReviews(req, res, next) {
       status: 'ok',
       count: reviews.length,
       reviews
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Batch analyze pending reviews using Gemini AI with Caching and Retries
+ * POST /api/reviews/analyze
+ */
+export async function analyzeReviews(req, res, next) {
+  try {
+    // 1. Find all pending reviews in MongoDB
+    const pendingReviews = await Review.find({ analysisStatus: 'pending' });
+
+    if (!pendingReviews || pendingReviews.length === 0) {
+      return res.status(200).json({
+        status: 'ok',
+        message: 'No pending reviews to analyze.',
+        stats: {
+          totalPending: 0,
+          processed: 0,
+          aiCalls: 0,
+          cacheHits: 0,
+          failedAnalyses: 0,
+          ratingMismatches: 0
+        }
+      });
+    }
+
+    // 2. Statistics tracker
+    const stats = {
+      totalPending: pendingReviews.length,
+      processed: 0,
+      aiCalls: 0,
+      cacheHits: 0,
+      failedAnalyses: 0,
+      ratingMismatches: 0
+    };
+
+    // 3. Split into batches of 5
+    const batches = chunkArray(pendingReviews, 5);
+
+    // 4. Process each batch sequentially using simple loops
+    for (const batch of batches) {
+      // Process the reviews inside this batch
+      for (const review of batch) {
+        try {
+          // STEP A: Cache Lookup using SHA-256 reviewHash
+          // Check if an identical review was already analyzed previously
+          const cachedReview = await Review.findOne({
+            reviewHash: review.reviewHash,
+            analysisStatus: 'analyzed',
+            _id: { $ne: review._id }
+          });
+
+          if (cachedReview) {
+            // Cache Hit: Reuse existing analysis without calling Gemini API
+            review.sentiment = cachedReview.sentiment;
+            review.topics = cachedReview.topics;
+            review.summary = cachedReview.summary;
+            review.needsReply = cachedReview.needsReply;
+            review.analysisStatus = 'analyzed';
+            stats.cacheHits++;
+          } else {
+            // STEP B: Cache Miss - Call Gemini API with Exponential Backoff Retry
+            const aiResult = await retryWithBackoff(async () => {
+              return await analyzeReviewWithAI(review.reviewText, review.product, review.rating);
+            }, 3, 1000);
+
+            stats.aiCalls++;
+
+            if (aiResult.success && aiResult.data) {
+              review.sentiment = aiResult.data.sentiment;
+              review.topics = aiResult.data.topics;
+              review.summary = aiResult.data.summary;
+              review.needsReply = aiResult.data.needs_reply;
+              review.analysisStatus = 'analyzed';
+            } else {
+              review.analysisStatus = 'analysis_failed';
+              stats.failedAnalyses++;
+            }
+          }
+
+          // STEP C: Contradiction / Rating Mismatch Detection
+          // e.g. 5-star rating with negative text, or 1-star rating with positive praise
+          if (review.rating !== null && review.sentiment) {
+            if (review.rating >= 4 && review.sentiment === 'negative') {
+              review.isRatingMismatch = true;
+              stats.ratingMismatches++;
+            } else if (review.rating <= 2 && review.sentiment === 'positive') {
+              review.isRatingMismatch = true;
+              stats.ratingMismatches++;
+            } else {
+              review.isRatingMismatch = false;
+            }
+          }
+
+          // Save the analyzed record
+          await review.save();
+          stats.processed++;
+        } catch (itemError) {
+          console.error(`Error processing review ${review.reviewId}:`, itemError.message);
+          review.analysisStatus = 'analysis_failed';
+          await review.save();
+          stats.failedAnalyses++;
+          stats.processed++;
+        }
+      }
+    }
+
+    return res.status(200).json({
+      status: 'ok',
+      message: `Analysis complete: ${stats.processed} reviews processed (${stats.cacheHits} cache hits, ${stats.aiCalls} AI calls).`,
+      stats
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Get dashboard summary statistics
+ * GET /api/reviews/stats
+ */
+export async function getReviewStats(req, res, next) {
+  try {
+    const allReviews = await Review.find();
+
+    const totalReviews = allReviews.length;
+    const analysedReviews = allReviews.filter(r => r.analysisStatus === 'analyzed');
+    const totalAnalysed = analysedReviews.length;
+
+    let positiveCount = 0;
+    let neutralCount = 0;
+    let negativeCount = 0;
+    let needsReplyCount = 0;
+    let ratingMismatchCount = 0;
+
+    for (const r of analysedReviews) {
+      if (r.sentiment === 'positive') positiveCount++;
+      if (r.sentiment === 'neutral') neutralCount++;
+      if (r.sentiment === 'negative') negativeCount++;
+      if (r.needsReply === true) needsReplyCount++;
+      if (r.isRatingMismatch === true) ratingMismatchCount++;
+    }
+
+    // Calculate percentages safely (avoid divide by zero)
+    const positivePercentage = totalAnalysed > 0 ? Number(((positiveCount / totalAnalysed) * 100).toFixed(1)) : 0;
+    const neutralPercentage = totalAnalysed > 0 ? Number(((neutralCount / totalAnalysed) * 100).toFixed(1)) : 0;
+    const negativePercentage = totalAnalysed > 0 ? Number(((negativeCount / totalAnalysed) * 100).toFixed(1)) : 0;
+
+    return res.status(200).json({
+      status: 'ok',
+      stats: {
+        totalReviews,
+        totalAnalysed,
+        positiveCount,
+        positivePercentage,
+        neutralCount,
+        neutralPercentage,
+        negativeCount,
+        negativePercentage,
+        needsReplyCount,
+        ratingMismatchCount
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+/**
+ * Get Top Complaints & Top Praises
+ * GET /api/reviews/insights
+ */
+export async function getReviewInsights(req, res, next) {
+  try {
+    const analysedReviews = await Review.find({ analysisStatus: 'analyzed' });
+
+    // 1. Count topic frequencies among negative reviews (Top Complaints)
+    const complaintCounts = {};
+    for (const r of analysedReviews) {
+      if (r.sentiment === 'negative' && Array.isArray(r.topics)) {
+        for (const topic of r.topics) {
+          complaintCounts[topic] = (complaintCounts[topic] || 0) + 1;
+        }
+      }
+    }
+
+    // 2. Count topic frequencies among positive reviews (Top Praises)
+    const praiseCounts = {};
+    for (const r of analysedReviews) {
+      if (r.sentiment === 'positive' && Array.isArray(r.topics)) {
+        for (const topic of r.topics) {
+          praiseCounts[topic] = (praiseCounts[topic] || 0) + 1;
+        }
+      }
+    }
+
+    // Helper: sort object entries descending and take top 3
+    function getTopThree(countsObj) {
+      return Object.entries(countsObj)
+        .map(([topic, count]) => ({ topic, count }))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 3);
+    }
+
+    const topComplaints = getTopThree(complaintCounts);
+    const topPraises = getTopThree(praiseCounts);
+
+    return res.status(200).json({
+      status: 'ok',
+      topComplaints,
+      topPraises
     });
   } catch (error) {
     next(error);

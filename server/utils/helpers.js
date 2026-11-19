@@ -101,3 +101,49 @@ export function validateRating(rawRating) {
 
   return null;
 }
+
+/**
+ * Splits an array into smaller chunks of a specified size.
+ * Used for batch processing reviews in groups of 5.
+ *
+ * @param {Array} array 
+ * @param {number} size 
+ * @returns {Array[]} array of chunks
+ */
+export function chunkArray(array, size = 5) {
+  if (!Array.isArray(array) || size <= 0) {
+    return [];
+  }
+  const chunks = [];
+  for (let i = 0; i < array.length; i += size) {
+    chunks.push(array.slice(i, i + size));
+  }
+  return chunks;
+}
+
+/**
+ * Executes an async function with exponential backoff retries.
+ * Used for handling rate limits (429) or transient server errors.
+ * Example delays: 1s -> 2s -> 4s
+ *
+ * @param {Function} asyncFn - asynchronous function returning a Promise
+ * @param {number} maxRetries - maximum attempts (default: 3)
+ * @param {number} initialDelayMs - base delay in milliseconds (default: 1000)
+ * @returns {Promise<any>}
+ */
+export async function retryWithBackoff(asyncFn, maxRetries = 3, initialDelayMs = 1000) {
+  let delay = initialDelayMs;
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await asyncFn();
+    } catch (error) {
+      if (attempt === maxRetries) {
+        throw error;
+      }
+      console.warn(`[RetryWithBackoff] Attempt ${attempt} failed: ${error.message}. Retrying in ${delay / 1000}s...`);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      delay *= 2; // Exponential backoff: 1s, 2s, 4s
+    }
+  }
+}

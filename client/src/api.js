@@ -37,6 +37,33 @@ export async function getReviews(params = {}) {
 }
 
 /**
+ * Trigger batch AI analysis of pending reviews
+ * @returns {Promise<object>}
+ */
+export async function analyzePendingReviews() {
+  const response = await apiClient.post('/reviews/analyze');
+  return response.data;
+}
+
+/**
+ * Fetch summary statistics for the dashboard
+ * @returns {Promise<object>}
+ */
+export async function getReviewStats() {
+  const response = await apiClient.get('/reviews/stats');
+  return response.data;
+}
+
+/**
+ * Fetch top complaints and praises
+ * @returns {Promise<object>}
+ */
+export async function getReviewInsights() {
+  const response = await apiClient.get('/reviews/insights');
+  return response.data;
+}
+
+/**
  * Check backend health status
  * @returns {Promise<object>}
  */

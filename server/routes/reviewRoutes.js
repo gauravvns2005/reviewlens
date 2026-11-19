@@ -1,6 +1,12 @@
 import express from 'express';
 import multer from 'multer';
-import { uploadReviews, getReviews } from '../controllers/reviewController.js';
+import {
+  uploadReviews,
+  getReviews,
+  analyzeReviews,
+  getReviewStats,
+  getReviewInsights
+} from '../controllers/reviewController.js';
 
 const router = express.Router();
 
@@ -30,6 +36,18 @@ const upload = multer({
 // Route: Upload CSV file
 // POST /api/reviews/upload
 router.post('/upload', upload.single('file'), uploadReviews);
+
+// Route: Batch analyze pending reviews
+// POST /api/reviews/analyze
+router.post('/analyze', analyzeReviews);
+
+// Route: Dashboard summary statistics
+// GET /api/reviews/stats
+router.get('/stats', getReviewStats);
+
+// Route: Top complaints and praises
+// GET /api/reviews/insights
+router.get('/insights', getReviewInsights);
 
 // Route: Get all reviews (supports ?sentiment=negative etc.)
 // GET /api/reviews
