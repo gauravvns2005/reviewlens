@@ -48,8 +48,8 @@ export function isEmojiOnly(text) {
     return false;
   }
 
-  // Regex matching emojis, symbols, and pictographs
-  const emojiRegex = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\s\p{Punctuation}]+$/u;
+  // Regex matching emojis, symbols, pictographs, variation marks, and punctuation
+  const emojiRegex = /^[\p{Extended_Pictographic}\p{Emoji_Presentation}\p{Emoji}\p{S}\p{Punctuation}\p{M}\s]+$/u;
   // Also check that it does not contain letters or digits in any language (\p{L} or \p{N})
   const hasAlphanumeric = /[\p{L}\p{N}]/u.test(stripped);
 
