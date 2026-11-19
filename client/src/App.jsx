@@ -57,15 +57,14 @@ function App() {
           </div>
         </div>
 
-        {/* Phase 1 Verification Box */}
+        {/* Phase 2 Verification Box */}
         <div className="status-box">
-          <h2>Phase 1: Environment & Connectivity Check</h2>
+          <h2>Phase 2: Database Connectivity & Health Status</h2>
           <p>
-            Vite React client running on <strong>http://localhost:5173</strong>.
-            Testing communication with Node.js Express server on <strong>{API_URL}</strong>.
+            Vite React client running on <strong>http://localhost:5173</strong> communicating with Express server on <strong>{API_URL}</strong>.
           </p>
 
-          {/* Connection Status Badge */}
+          {/* Connection Status Badges */}
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
             {loading && (
               <span className="badge badge-loading">
@@ -75,10 +74,17 @@ function App() {
             )}
 
             {!loading && healthData && (
-              <span className="badge badge-online">
-                <span className="dot dot-online"></span>
-                Backend Online & Healthy (Status: {healthData.status})
-              </span>
+              <>
+                <span className="badge badge-online">
+                  <span className="dot dot-online"></span>
+                  Backend: Online (Port 5000)
+                </span>
+
+                <span className={`badge ${healthData.database?.connected ? 'badge-online' : 'badge-offline'}`}>
+                  <span className={`dot ${healthData.database?.connected ? 'dot-online' : 'dot-offline'}`}></span>
+                  MongoDB: {healthData.database?.status || 'Unknown'}
+                </span>
+              </>
             )}
 
             {!loading && error && (

@@ -2,12 +2,17 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import dotenv from 'dotenv';
+import mongoose from 'mongoose';
+import connectDB from './config/db.js';
 
 // 1. Load environment variables from .env file
 dotenv.config();
 
 // 2. Initialize the Express application
 const app = express();
+
+// 3. Connect to MongoDB Atlas
+connectDB();
 
 // 3. Define the server port and frontend client URL
 const PORT = process.env.PORT || 5000;
@@ -28,11 +33,25 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // 7. Health Check API endpoint
-// Used by the frontend or monitoring tools to verify the backend is running
+// Used by the frontend or monitoring tools to verify the backend and database status
 app.get('/api/health', (req, res) => {
+  // Map Mongoose readyState numbers to readable text
+  const dbStates = {
+    0: 'disconnected',
+    1: 'connected',
+    2: 'connecting',
+    3: 'disconnecting'
+  };
+
+  const dbStatus = dbStates[mongoose.connection.readyState] || 'unknown';
+
   res.status(200).json({
     status: 'ok',
     message: 'ReviewLens Backend API is running smoothly',
+    database: {
+      status: dbStatus,
+      connected: mongoose.connection.readyState === 1
+    },
     timestamp: new Date().toISOString()
   });
 });
