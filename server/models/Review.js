@@ -36,10 +36,10 @@ const reviewSchema = new mongoose.Schema(
     },
 
     // Original review text (preserves English, Hindi, Hinglish, emojis, etc.)
+    // Note: Empty reviews like R005 are valid edge cases, so default is empty string
     reviewText: {
       type: String,
-      required: [true, 'Review text is required'],
-      trim: true
+      default: ''
     },
 
     // AI-determined sentiment: "positive" | "neutral" | "negative"

@@ -147,8 +147,10 @@ function Dashboard() {
     }
   }
 
-  // Calculate pending reviews
-  const pendingCount = reviews.filter(r => r.analysisStatus === 'pending').length;
+  // Calculate reviews that need analysis (pending or previously failed)
+  const pendingCount = reviews.filter(
+    r => r.analysisStatus === 'pending' || r.analysisStatus === 'analysis_failed'
+  ).length;
 
   return (
     <div className="dashboard-layout">

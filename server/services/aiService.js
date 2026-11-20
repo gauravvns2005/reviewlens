@@ -1,4 +1,12 @@
+import dotenv from 'dotenv';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { GoogleGenerativeAI } from '@google/generative-ai';
+
+// Ensure environment variables are loaded
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 // Allowed sentiment categories
 export const ALLOWED_SENTIMENTS = ['positive', 'neutral', 'negative'];
@@ -105,20 +113,21 @@ Return ONLY the raw JSON object without markdown fences, explanation, or extra t
 
 /**
  * Initializes Gemini Generative Model instance.
- * Returns null if GEMINI_API_KEY is not set.
+ * Defaults to 'gemini-3.5-flash' which is supported by the user's API key.
  */
-function getGeminiModel() {
+function getGeminiModel(customModelName) {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey || apiKey.trim() === '' || apiKey === 'your_gemini_api_key_here') {
     return null;
   }
 
+  const modelName = customModelName || process.env.GEMINI_MODEL || 'gemini-3.5-flash';
   const genAI = new GoogleGenerativeAI(apiKey);
   return genAI.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: modelName,
     generationConfig: {
       responseMimeType: 'application/json',
-      temperature: 0.1 // Low temperature for deterministic, consistent classification
+      temperature: 0.1 // Low temperature for deterministic classification
     }
   });
 }

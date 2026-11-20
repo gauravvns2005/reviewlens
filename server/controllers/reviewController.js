@@ -27,7 +27,13 @@ async function getStoredReviews(filter = {}) {
     if (filter.sentiment && r.sentiment !== filter.sentiment) return false;
     if (filter.product && r.product !== filter.product) return false;
     if (filter.needsReply !== undefined && r.needsReply !== filter.needsReply) return false;
-    if (filter.analysisStatus && r.analysisStatus !== filter.analysisStatus) return false;
+    if (filter.analysisStatus) {
+      if (filter.analysisStatus.$in && Array.isArray(filter.analysisStatus.$in)) {
+        if (!filter.analysisStatus.$in.includes(r.analysisStatus)) return false;
+      } else if (r.analysisStatus !== filter.analysisStatus) {
+        return false;
+      }
+    }
     return true;
   });
 }
@@ -56,7 +62,15 @@ async function saveReviewDoc(reviewData) {
   if (mongoose.connection.readyState === 1) {
     const existing = await Review.findOne({ reviewId: reviewData.reviewId });
     if (existing) {
-      Object.assign(existing, reviewData);
+      existing.product = reviewData.product;
+      existing.rating = reviewData.rating;
+      existing.date = reviewData.date;
+      existing.reviewText = reviewData.reviewText;
+      existing.reviewHash = reviewData.reviewHash;
+      // If it was never analyzed or previously failed, allow re-analysis
+      if (existing.analysisStatus !== 'analyzed') {
+        existing.analysisStatus = reviewData.analysisStatus;
+      }
       return await existing.save();
     }
     return await Review.create(reviewData);
@@ -73,7 +87,15 @@ async function saveReviewDoc(reviewData) {
   };
 
   if (existingIndex >= 0) {
-    memoryStore[existingIndex] = { ...memoryStore[existingIndex], ...doc };
+    if (memoryStore[existingIndex].analysisStatus !== 'analyzed') {
+      memoryStore[existingIndex] = { ...memoryStore[existingIndex], ...doc };
+    } else {
+      memoryStore[existingIndex].product = reviewData.product;
+      memoryStore[existingIndex].rating = reviewData.rating;
+      memoryStore[existingIndex].date = reviewData.date;
+      memoryStore[existingIndex].reviewText = reviewData.reviewText;
+      memoryStore[existingIndex].reviewHash = reviewData.reviewHash;
+    }
     return memoryStore[existingIndex];
   } else {
     memoryStore.push(doc);
@@ -172,9 +194,13 @@ export async function uploadReviews(req, res, next) {
         isRatingMismatch: false
       };
 
-      const savedDoc = await saveReviewDoc(reviewData);
-      savedReviews.push(savedDoc);
-      stats.saved++;
+      try {
+        const savedDoc = await saveReviewDoc(reviewData);
+        savedReviews.push(savedDoc);
+        stats.saved++;
+      } catch (rowError) {
+        console.error(`Error saving review ${reviewId}:`, rowError.message);
+      }
     }
 
     return res.status(200).json({
@@ -227,7 +253,9 @@ export async function analyzeReviews(req, res, next) {
       });
     }
 
-    const pendingReviews = await getStoredReviews({ analysisStatus: 'pending' });
+    const pendingReviews = await getStoredReviews({
+      analysisStatus: { $in: ['pending', 'analysis_failed'] }
+    });
 
     if (!pendingReviews || pendingReviews.length === 0) {
       return res.status(200).json({
