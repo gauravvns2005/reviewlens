@@ -21,14 +21,17 @@ connectDB();
 
 // 3. Define the server port and frontend client URL
 const PORT = process.env.PORT || 5000;
-const CLIENT_ORIGIN = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const CLIENT_ORIGINS = [
+  'http://localhost:5173',
+  'https://client-rho-three-41.vercel.app'
+];
 
 // 4. Security middleware - sets basic HTTP headers for security
 app.use(helmet());
 
 // 5. CORS middleware - allows requests from our React frontend
 app.use(cors({
-  origin: CLIENT_ORIGIN,
+  origin: CLIENT_ORIGINS,
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   credentials: true
 }));
