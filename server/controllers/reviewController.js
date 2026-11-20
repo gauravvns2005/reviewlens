@@ -62,15 +62,18 @@ async function saveReviewDoc(reviewData) {
   if (mongoose.connection.readyState === 1) {
     const existing = await Review.findOne({ reviewId: reviewData.reviewId });
     if (existing) {
-      existing.product = reviewData.product;
-      existing.rating = reviewData.rating;
-      existing.date = reviewData.date;
-      existing.reviewText = reviewData.reviewText;
-      existing.reviewHash = reviewData.reviewHash;
-      // If it was never analyzed or previously failed, allow re-analysis
-      if (existing.analysisStatus !== 'analyzed') {
-        existing.analysisStatus = reviewData.analysisStatus;
-      }
+      if (reviewData.product !== undefined) existing.product = reviewData.product;
+      if (reviewData.rating !== undefined) existing.rating = reviewData.rating;
+      if (reviewData.date !== undefined) existing.date = reviewData.date;
+      if (reviewData.reviewText !== undefined) existing.reviewText = reviewData.reviewText;
+      if (reviewData.reviewHash !== undefined) existing.reviewHash = reviewData.reviewHash;
+      if (reviewData.analysisStatus !== undefined) existing.analysisStatus = reviewData.analysisStatus;
+      if (reviewData.sentiment !== undefined) existing.sentiment = reviewData.sentiment;
+      if (reviewData.topics !== undefined) existing.topics = reviewData.topics;
+      if (reviewData.summary !== undefined) existing.summary = reviewData.summary;
+      if (reviewData.needsReply !== undefined) existing.needsReply = reviewData.needsReply;
+      if (reviewData.isRatingMismatch !== undefined) existing.isRatingMismatch = reviewData.isRatingMismatch;
+      if (reviewData.suggestedReply !== undefined) existing.suggestedReply = reviewData.suggestedReply;
       return await existing.save();
     }
     return await Review.create(reviewData);
@@ -87,15 +90,7 @@ async function saveReviewDoc(reviewData) {
   };
 
   if (existingIndex >= 0) {
-    if (memoryStore[existingIndex].analysisStatus !== 'analyzed') {
-      memoryStore[existingIndex] = { ...memoryStore[existingIndex], ...doc };
-    } else {
-      memoryStore[existingIndex].product = reviewData.product;
-      memoryStore[existingIndex].rating = reviewData.rating;
-      memoryStore[existingIndex].date = reviewData.date;
-      memoryStore[existingIndex].reviewText = reviewData.reviewText;
-      memoryStore[existingIndex].reviewHash = reviewData.reviewHash;
-    }
+    memoryStore[existingIndex] = { ...memoryStore[existingIndex], ...reviewData, updatedAt: new Date() };
     return memoryStore[existingIndex];
   } else {
     memoryStore.push(doc);
@@ -253,8 +248,10 @@ export async function analyzeReviews(req, res, next) {
       });
     }
 
-    const pendingReviews = await getStoredReviews({
-      analysisStatus: { $in: ['pending', 'analysis_failed'] }
+    const allCandidateReviews = await getStoredReviews();
+    const pendingReviews = allCandidateReviews.filter(r => {
+      if (r.analysisStatus === 'insufficient_content') return false;
+      return r.analysisStatus === 'pending' || r.analysisStatus === 'analysis_failed' || !r.sentiment;
     });
 
     if (!pendingReviews || pendingReviews.length === 0) {
@@ -284,7 +281,7 @@ export async function analyzeReviews(req, res, next) {
     const batches = chunkArray(pendingReviews, 5);
 
     for (const batch of batches) {
-      for (const review of batch) {
+      await Promise.all(batch.map(async (review) => {
         try {
           // STEP A: Cache Lookup
           const cachedReview = await findSingleReview({
@@ -293,7 +290,7 @@ export async function analyzeReviews(req, res, next) {
             _id: { $ne: review._id }
           });
 
-          if (cachedReview) {
+          if (cachedReview && cachedReview.sentiment) {
             review.sentiment = cachedReview.sentiment;
             review.topics = cachedReview.topics;
             review.summary = cachedReview.summary;
@@ -342,7 +339,7 @@ export async function analyzeReviews(req, res, next) {
           stats.failedAnalyses++;
           stats.processed++;
         }
-      }
+      }));
     }
 
     return res.status(200).json({

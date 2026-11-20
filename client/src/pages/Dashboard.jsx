@@ -99,7 +99,7 @@ function Dashboard() {
       const msg = err.response?.data?.message || err.message;
       setNotification({
         type: 'error',
-        message: `Analysis failed: ${msg}. Make sure GEMINI_API_KEY is configured in server/.env.`
+        message: `Analysis failed: ${msg}`
       });
     } finally {
       setAnalyzing(false);
@@ -147,9 +147,9 @@ function Dashboard() {
     }
   }
 
-  // Calculate reviews that need analysis (pending or previously failed)
+  // Calculate reviews that need analysis (pending, failed, or missing sentiment)
   const pendingCount = reviews.filter(
-    r => r.analysisStatus === 'pending' || r.analysisStatus === 'analysis_failed'
+    r => r.analysisStatus !== 'insufficient_content' && (r.analysisStatus === 'pending' || r.analysisStatus === 'analysis_failed' || !r.sentiment)
   ).length;
 
   return (

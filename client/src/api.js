@@ -41,7 +41,9 @@ export async function getReviews(params = {}) {
  * @returns {Promise<object>}
  */
 export async function analyzePendingReviews() {
-  const response = await apiClient.post('/reviews/analyze');
+  const response = await apiClient.post('/reviews/analyze', {}, {
+    timeout: 180000 // 3 minutes timeout for batch AI processing
+  });
   return response.data;
 }
 
@@ -69,7 +71,9 @@ export async function getReviewInsights() {
  * @returns {Promise<object>}
  */
 export async function generateSuggestedReply(reviewId) {
-  const response = await apiClient.post(`/reviews/${reviewId}/reply`);
+  const response = await apiClient.post(`/reviews/${reviewId}/reply`, {}, {
+    timeout: 60000 // 1 minute timeout for single response generation
+  });
   return response.data;
 }
 
